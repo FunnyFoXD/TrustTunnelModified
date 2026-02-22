@@ -21,9 +21,20 @@ impl HttpDemux {
             net_utils::Channel::Speedtest
         } else if self.check_reverse_proxy(protocol, request) {
             net_utils::Channel::ReverseProxy
+        } else if self.check_fallback(request) {
+            net_utils::Channel::Fallback
         } else {
             net_utils::Channel::Tunnel
         }
+    }
+
+    /// Treat as normal browser visit: GET/HEAD to / or /favicon.ico etc. → neutral response
+    fn check_fallback(&self, request: &http_codec::RequestHeaders) -> bool {
+        if request.method != http::Method::GET && request.method != http::Method::HEAD {
+            return false;
+        }
+        let path = request.uri.path();
+        path == "/" || path == "/favicon.ico" || path.starts_with("/.well-known/")
     }
 
     fn check_ping(&self, request: &http_codec::RequestHeaders) -> bool {

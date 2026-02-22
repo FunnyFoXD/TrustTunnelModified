@@ -117,6 +117,14 @@ impl Downstream for HttpDownstream {
                         id: stream_id,
                     })));
                 }
+                net_utils::Channel::Fallback => {
+                    log_id!(trace, stream_id, "HTTP downstream: fallback (browser) request");
+                    tokio::spawn(async move {
+                        if let Err(e) = send_fallback_response(stream, stream_id).await {
+                            log_id!(debug, stream_id, "Failed to send fallback response: {}", e);
+                        }
+                    });
+                }
                 net_utils::Channel::Ping => {
                     log_id!(trace, stream_id, "HTTP downstream: ping request");
                     tokio::spawn(async move {
@@ -453,4 +461,28 @@ fn request_hostname(request: &dyn http_codec::PendingRequest) -> &str {
         .authority()
         .map(http::uri::Authority::as_str)
         .unwrap_or_default()
+}
+
+async fn send_fallback_response(
+    stream: Box<dyn http_codec::Stream>,
+    log_id: log_utils::IdChain<u64>,
+) -> io::Result<()> {
+    const HTML: &[u8] = b"<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Not Found</title></head><body><h1>Not Found</h1><p>The requested resource was not found.</p></body></html>";
+    let response = http::Response::builder()
+        .status(http::StatusCode::OK)
+        .header(http::header::CONTENT_TYPE, "text/html; charset=utf-8")
+        .header(http::header::CONTENT_LENGTH, HTML.len())
+        .body(())
+        .map_err(|e| io::Error::new(ErrorKind::Other, e.to_string()))?
+        .into_parts()
+        .0;
+    let mut sink = stream
+        .split()
+        .1
+        .send_response(response, false)
+        .map_err(|e| io::Error::new(ErrorKind::Other, e.to_string()))?
+        .into_pipe_sink();
+    sink.write_all(Bytes::from_static(HTML)).await?;
+    sink.eof()?;
+    Ok(())
 }
